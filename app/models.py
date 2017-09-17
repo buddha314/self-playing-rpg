@@ -87,18 +87,14 @@ class Automata:
         s = self.con / 18.0 + self.adaptability() * (self.current_hit_points / self.hit_points - 1/2)
         return math.tanh(s)
 
-    def decide_to_travel(self):
-        r = self.get_bravado()
-        if random.random() < r:
-            return True
-        else:
-            return False
-
     def move(self):
-        if self.decide_to_travel():
+        if random.random() < self.get_bravado():
             self.current_lon = self.current_lon + random.randint(-1,1)
             self.current_lat = self.current_lat + random.randint(-1,1)
+            return 1
             #print("moving to ({lat}, {lon})".format(lat=self.current_lat, lon=self.current_lon))
+        else:
+            return 0
 
     def age(self):
         self.current_hit_points += -1
@@ -110,24 +106,33 @@ class Automata:
 
     def loot_cell(self, cell):
         self.total_lootings += 1
+        wpns = 0
+        gld = 0
+        armr = 0
         for item in cell.items:
             if isinstance(item, Weapon):
                 self.weapons.append(item)
                 if isinstance(self.ready_weapon, Fist):
                     self.ready_weapon = item
+                wpns += 1
             if isinstance(item, (SmallShield, LargeShield)):
                 self.inventory.append(item)
                 if isinstance(self.shield, NoShield):
                     self.shield = item
+                armr += 1
             cell.items.remove(item)
+        gld += cell.gold
         self.gold += cell.gold
         cell.gold = 0
+        return (wpns, armr, gld)
+
 
     def farm_cell(self, cell):
         fu = min(self.hit_points - self.current_hit_points, cell.food_units)
         cell.food_units -= fu
         #print("cell units left: {u}".format(u=cell.food_units))
-        cell.current_hit_points = self.current_hit_points + fu
+        self.current_hit_points = self.current_hit_points + fu
+        return fu
 
     def initiative(self):
         return 10 + stat_bonus[self.dex]
@@ -173,6 +178,7 @@ class Game:
             for j in range(self.world.n_lat):
                 cell = self.world.cells[i,j]
                 today.new_food_units += cell.grow()
+                today.total_food_units += cell.food_units
 
         # Automata actions
         for p in self.world.population:
@@ -186,8 +192,12 @@ class Game:
             if random.random() < p.get_curiosity():
                 today.lootings += 1
                 today.farmings += 1
-                p.loot_cell(current_cell)
-                p.farm_cell(current_cell)
+                w,a,g = p.loot_cell(current_cell)
+                today.found_weapons += w
+                today.found_armor += a
+                today.found_gold += g
+                today.consumed_food_units += p.farm_cell(current_cell)
+                today.travels += p.move()
 
                 # Automata Interactions
                 for q in self.world.population[p.ssn+1:]:
@@ -200,6 +210,7 @@ class Game:
             print("Day {day} APOCALPYSE!!".format(day=today.day_number))
             return False
         else:
+            today.population_size = len(self.world.population)
             self.build_report(today)
             self.days.append(today)
             return True
@@ -351,6 +362,13 @@ class Day(object):
         self.interactions = 0
         self.farmings = 0
         self.new_food_units = 0
+        self.found_weapons = 0.0
+        self.found_gold = 0.0
+        self.found_armor = 0.0
+        self.travels = 0
+        self.total_food_units = 0.0
+        self.consumed_food_units = 0.0
+        self.population_size = 0.0
 
 
     def build_report(self):
@@ -367,4 +385,11 @@ class Day(object):
         self.report['farmings'] = self.farmings
         self.report['murders'] = self.murders
         self.report['new_food_units'] = self.new_food_units
+        self.report['found_gold'] = self.found_gold
+        self.report['found_weapons'] = self.found_weapons
+        self.report['found_armor'] = self.found_armor
+        self.report['travels'] = self.travels
+        self.report['consumed_food_units'] = self.consumed_food_units
+        self.report['total_food_units'] = self.total_food_units
+        self.report['population_size'] = self.population_size
         return self.report
