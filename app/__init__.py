@@ -13,5 +13,5 @@ n_days= 365
 n_years = 2
 
 
-world = World(n_lat,n_long, n_initial_inhabitants)
+#world = World(n_lat,n_long, n_initial_inhabitants)
 #run_world(world, n_days)
