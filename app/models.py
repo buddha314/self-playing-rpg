@@ -1,4 +1,5 @@
 import random, math
+import copy
 import numpy as np
 import world_config
 from weapons import *
@@ -60,21 +61,31 @@ class Automata:
         self.shield = NoShield()
         self.armor = None
         self.ready_weapon = Fist()
+        self.inventory = []
+
+    def adaptability(self):
+        return (self.wis + self.int)/36
 
     def get_aggressiveness(self):
+        s = (self.str+self.con)/36.0
         if self.total_combats > 0:
-            return math.tanh(self.successful_combats / self.total_combats)
+            s+= self.adaptability() * (self.successful_combats/self.total_combats - 1/2)
+            #s = (self.str+self.con)/36.0 + self.adaptability() * (self.successful_combats/self.total_combats - 1/2)
+            #return math.tanh(s)
         else:
-            return math.tanh(random.random())
+            s = (self.str+self.con)/36.0
+            return math.tanh(s)
+        return math.tanh(s)
 
     def get_curiosity(self):
+        s = self.int/18.0
         if self.total_lootings > 0:
-            return math.tanh(self.successful_lootings / self.total_lootings)
-        else:
-            return math.tanh(random.random())
+            s+= self.adaptability() * (self.successful_lootings / self.total_lootings - 1/2)
+        return math.tanh(s)
 
     def get_bravado(self):
-        return math.tanh(random.random())
+        s = self.con / 18.0 + self.adaptability() * (self.current_hit_points / self.hit_points - 1/2)
+        return math.tanh(s)
 
     def decide_to_travel(self):
         r = self.get_bravado()
@@ -97,18 +108,154 @@ class Automata:
         #return self.shield.ac_bonus + self.armor_bonus + stat_bonus[self.dex]
         return self.shield.ac_bonus  + stat_bonus[self.dex]
 
+    def loot_cell(self, cell):
+        self.total_lootings += 1
+        for item in cell.items:
+            if isinstance(item, Weapon):
+                self.weapons.append(item)
+                if isinstance(self.ready_weapon, Fist):
+                    self.ready_weapon = item
+            if isinstance(item, (SmallShield, LargeShield)):
+                self.inventory.append(item)
+                if isinstance(self.shield, NoShield):
+                    self.shield = item
+            cell.items.remove(item)
+        self.gold += cell.gold
+        cell.gold = 0
+
+    def farm_cell(self, cell):
+        fu = min(self.hit_points - self.current_hit_points, cell.food_units)
+        cell.food_units -= fu
+        #print("cell units left: {u}".format(u=cell.food_units))
+        cell.current_hit_points = self.current_hit_points + fu
+
+    def initiative(self):
+        return 10 + stat_bonus[self.dex]
+
+
 class Cell:
     def __init__(self, x, y):
         self.x = x
         self.y = y
         #self.fertility = random.random()
-        self.fertility = random.random()
+        self.fertility = 0
         self.food_units = random.randint(0,10)
         self.items = []
+        self.gold = random.randint(0,10)
 
     def grow(self):
         if random.random() < self.fertility:
             self.food_units += 1
+            return 1
+        else:
+            return 0
+
+class Game:
+    def __init__(self, world, ndays=365, nyears=1):
+        self.ndays = ndays
+        self.nyears = 1
+        self.world = world
+        self.days = []
+
+    def run(self):
+        for i in range(self.ndays * self.nyears):
+            today = Day(i)
+            go = self.run_day(today)
+            if go:
+                continue
+            else:
+                break
+
+
+    def run_day(self, today):
+        # Cell actions
+        for i in range(self.world.n_lon):
+            for j in range(self.world.n_lat):
+                cell = self.world.cells[i,j]
+                today.new_food_units += cell.grow()
+
+        # Automata actions
+        for p in self.world.population:
+            p.age()
+            if p.current_hit_points <= 0:
+                today.starvations += 1
+                self.world.population.remove(p)
+                continue
+            # Individual actions
+            current_cell = self.world.cells[p.current_lon, p.current_lat]
+            if random.random() < p.get_curiosity():
+                today.lootings += 1
+                today.farmings += 1
+                p.loot_cell(current_cell)
+                p.farm_cell(current_cell)
+
+                # Automata Interactions
+                for q in self.world.population[p.ssn+1:]:
+                    if p.current_cell == q.current_cell:
+                        today.interactions += 1
+                        self.interaction(today, p, q)
+
+
+        if len(self.world.population) <= 0:
+            print("Day {day} APOCALPYSE!!".format(day=today.day_number))
+            return False
+        else:
+            self.build_report(today)
+            self.days.append(today)
+            return True
+
+    def build_report(self, today):
+        today.population_size = copy.copy(len(self.world.population))
+        for p in self.world.population:
+            today.avg_curiosity += p.get_curiosity() / today.population_size
+            today.avg_bravado += p.get_bravado() / today.population_size
+            today.avg_gold += 1.0 * p.gold / today.population_size
+            today.avg_aggression += p.get_aggressiveness() / today.population_size
+
+    def report(self):
+        report = []
+        for day in self.days:
+            day.build_report()
+            report.append(day.report)
+        return report
+
+    def interaction(self, today, me, you):
+        if random.random() < (me.get_aggressiveness() + you.get_aggressiveness()) / 2:
+            today.combats += 1
+            self.combat(today, me, you)
+            print("Fight!")
+        else:
+            print("no combat")
+
+    def combat(self, today, me, you):
+        me.total_combats +=1
+        you.total_combats +=1
+        if me.initiative() > you.initiative():
+            if self.attack(today, me, you):
+                self.attack(today, you, me)
+        elif me.initiative() < you.initiative():
+            if self.attack(today, you, me):
+                self.attack(today, me, you)
+        elif random.random() < 0.5:
+            if self.attack(today, me, you):
+                self.attack(today, you, me)
+        else:
+            if self.attack(today, you, me):
+                self.attack(today, me, you)
+
+    def attack(self, today, attacker, target):
+        roll = random.randint(1,20)
+        if roll + stat_bonus[attacker.str] > target.ac():
+            damage = max(0, attacker.ready_weapon.damage()) + stat_bonus[attacker.str]
+            target.current_hit_points -= damage
+            if target.current_hit_points <= 0:
+                print("Murder!")
+                self.world.population.remove(target)
+                today.murders +=1
+                attacker.successful_combats += 1
+                return False
+            else:
+                return True
 
 
 class World:
@@ -119,31 +266,40 @@ class World:
         self.n_lon = world_config.n_lon
         self.cells = np.empty((world_config.n_lat, world_config.n_lon), dtype=object)
         self.population = []
+        self.generate_cells()
+        self.build_population()
+
+    def generate_cells(self):
         for i in range(world_config.n_lon):
             for j in range(world_config.n_lat):
                 c = Cell(i,j)
+                c.fertility = world_config.farmland_fertility
                 if random.random() < world_config.dagger_density:
                     c.items.append(Dagger())
                 if random.random() < world_config.smallshield_density:
                     c.items.append(SmallShield())
                 if random.random() < world_config.largeshield_density:
                     c.items.append(LargeShield())
-
                 self.cells[i,j] = c
 
+    def build_population(self):
         for i in range(world_config.initial_population_size):
             a = Automata()
             a.ssn = i
-            a.current_lon = random.randint(0,self.n_lat-1)
-            a.current_lat = random.randint(0,self.n_lon-1)
+            x = random.randint(0,self.n_lat-1)
+            y = random.randint(0,self.n_lon-1)
+            #a.current_lon = random.randint(0,self.n_lat-1)
+            #a.current_lat = random.randint(0,self.n_lon-1)
+            a.current_cell = self.cells[x,y]
             self.population.append(a)
 
+    """
     def one_day(self):
         #today = Day(self.day +1, self.population)
-        today = Day(self.day +1)
+        today = Day(copy.copy(self.day))
         self.day += 1
+        today.population_size = copy.copy(len(self.population))
         for p in self.population:
-            today.population.append(p)
             h = p.age()
             if h <= 0:
                 today.starvations += 1
@@ -152,14 +308,14 @@ class World:
                 current_cell = self.cells[p.current_lon, p.current_lat]
                 self.consider_move(p, current_cell)
                 self.farm_cell(p, current_cell)
-                for you in self.population[p.ssn+1:]:
+                #for you in self.population[p.ssn+1:]:
+                for you in today.population[p.ssn+1:]:
                     if p.ssn != you.ssn and you.current_lon == p.current_lon and you.current_lat == p.current_lat:
                         #print("{me} met {you}".format(me=p.ssn, you=you.ssn))
                         self.automata_interaction(today, p, you)
                 if random.random() < p.get_curiosity():
                     self.loot_cell(day=today, automata=p, cell=current_cell)
-
-        #self.day_report()=
+        self.day_report(today)
         self.days.append(today)
         if len(self.population) <= 0:
             print("Day {day} APOCALPYSE!".format(day=self.day))
@@ -177,127 +333,38 @@ class World:
         cell.food_units -= fu
         #print("cell units left: {u}".format(u=cell.food_units))
         automata.current_hit_points = automata.current_hit_points + fu
-
-    def loot_cell(self, day, automata, cell):
-        day.lootings += 1
-        automata.total_lootings += 1
-        if len(cell.items) > 0:
-            automata.successful_lootings += 1
-            automata.curiosity +=  math.tanh(automata.successful_lootings/automata.total_lootings)
-        for item in cell.items:
-            if isinstance(item, Weapon):
-                automata.weapons.append(item)
-                cell.items.remove(item)
-                if isinstance(automata.ready_weapon, Fist):
-                    automata.ready_weapon = item
-            if isinstance(item, (SmallShield, LargeShield)) and isinstance(automata.shield, NoShield):
-                automata.shield = item
-                cell.items.remove(item)
-
-    def automata_interaction(self, day, me, you):
-        self.combat(day, me, you)
-
-    def combat(self, day, me, you):
-        day.combats += 1
-        me.total_combats += 1
-        you.total_combats += 1
-        first = me
-        second = you
-        if me.dex < you.dex:
-            first = you
-            second = me
-        elif me.dex == you.dex:
-            first = me
-            second = you
-        #print("Fight! {id} goes first".format(id=first.ssn))
-        roll = random.randint(1,20)
-        if roll + stat_bonus[first.str] > second.ac():
-            damage = max(0,first.ready_weapon.damage() + stat_bonus[first.str])
-            second.current_hit_points -= damage
-            #print("\tA touch! Damage: {d}".format(d= damage))
-        if second.current_hit_points <= 0:
-            first.successful_combats += 1
-            first.aggressiveness += first.successful_combats / first.total_combats
-            first.gold += second.gold
-            self.population.remove(second)
-            day.murders += 1
-            #print("\t{id} is dead".format(id=second.ssn))
-            return
-        # Second gets her turn
-        roll = random.randint(1,20)
-        if roll + stat_bonus[second.str] > first.ac():
-            damage = max(0,second.ready_weapon.damage() + stat_bonus[second.str])
-            first.current_hit_points -= damage
-            #print("\tA touch! Damage: {d}".format(d= damage))
-        if first.current_hit_points <= 0:
-            second.successful_combats += 1
-            second.aggressiveness += second.successful_combats / second.total_combats
-            second.gold += first.gold
-            day.murders += 1
-            self.population.remove(first)
-            print("\t{id} is dead".format(id=first.ssn))
-            return
-
-    def day_report(self):
-        #print("Day: {day}\n\tliving population: {pop_size}\n".format(day=self.day, pop_size=len(self.population)))
-        numcur = 0
-        numbrv = 0
-        numagg = 0
-        numgreg = 0
-        numgold = 0
-        for p in self.population:
-            numcur += p.get_curiosity()
-            numbrv += p.bravado
-            numagg += p.get_aggressiveness()
-            numgreg += p.gregariousness
-            numgold += p.gold
-        return (self.day, len(self.population)
-            , numcur/len(self.population)
-            , numbrv/len(self.population)
-            , numagg/len(self.population)
-            , numgreg/len(self.population)
-            , numgold/len(self.population)
-            )
+    """
 
 class Day(object):
-    combats = 0
-    murders = 0
-    starvations = 0
-    population = []
-
     def __init__(self, day):
         self.day_number = day
         self.lootings = 0
         self.report = {}
+        self.avg_curiosity = 0.0
+        self.avg_bravado = 0.0
+        self.avg_gold = 0.0
+        self.avg_aggression = 0.0
+        self.avg_gregariousness = 0.0
+        self.combats = 0.0
+        self.murders = 0
+        self.starvations = 0
+        self.interactions = 0
+        self.farmings = 0
+        self.new_food_units = 0
 
-    def day_report(self):
-        self.report['pop'] = len(self.population)
-        self.report['murders'] = self.murders
-        self.report['starvations'] = self.starvations
-        numcur = 0
-        numbrv = 0
-        numagg = 0
-        numgreg = 0
-        numgold = 0
-        for p in self.population:
-            numcur += p.get_curiosity()
-            numbrv += p.bravado
-            numagg += p.get_aggressiveness()
-            numgreg += p.gregariousness
-            numgold += p.gold
+
+    def build_report(self):
         self.report['day_number'] = self.day_number
-        self.report['avg_curiosity'] = numcur/len(self.population)
-        self.report['avg_bravado'] = numbrv/len(self.population)
-        self.report['avg_aggression'] = numagg/len(self.population)
-        self.report['avg_gregariousness'] = numgreg/len(self.population)
-        self.report['avg_gold'] = numgold/len(self.population)
+        self.report['starvations'] = self.starvations
+        self.report['combats'] = self.combats
+        self.report['avg_gold'] = self.avg_gold
+        self.report['avg_aggression'] = self.avg_aggression
+        self.report['avg_bravado'] = self.avg_bravado
+        self.report['avg_curiosity'] = self.avg_curiosity
+        self.report['avg_gregariousness'] = self.avg_gregariousness
+        self.report['interactions'] = self.interactions
+        self.report['lootings'] = self.lootings
+        self.report['farmings'] = self.farmings
+        self.report['murders'] = self.murders
+        self.report['new_food_units'] = self.new_food_units
         return self.report
-        """
-        return (self.day, len(self.population)
-            , numcur/len(self.population)
-            , numbrv/len(self.population)
-            , numagg/len(self.population)
-            , numgreg/len(self.population)
-            , numgold/len(self.population)
-            )
-        """

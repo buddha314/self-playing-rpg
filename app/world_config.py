@@ -7,3 +7,5 @@ n_lat = 100
 n_lon = 100
 n_days= 365
 n_years = 2
+desert_fertility=0.05
+farmland_fertility=0.75
