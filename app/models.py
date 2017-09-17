@@ -1,6 +1,8 @@
 import random, math
 import numpy as np
 import world_config
+from weapons import *
+from armor import *
 
 stat_bonus = {}
 stat_bonus[3] = -4
@@ -20,33 +22,15 @@ stat_bonus[16] = 3
 stat_bonus[17] = 3
 stat_bonus[18] = 4
 
-class Weapon(object):
-    def __init__(self, n_die, die):
-        self.n_die = n_die
-        self.die = die
-
-    def damage(self):
-        return sum([random.randint(1,self.die) for x in range(self.n_die)])
-
-class Dagger(Weapon):
-    def __init__(self):
-        super(Dagger, self).__init__(1, 4)
-        self.name = "dagger"
-
-class LongSword(Weapon):
-    def __init__(self):
-        super(Dagger, self).__init__(1, 8)
-        self.name = "LongSword"
-
-class Fist(Weapon):
-    def __init__(self):
-        super(Fist, self).__init__(1,2)
-        self.name = "Fist"
 
 class Automata:
     current_lon = 0
     current_lat = 0
     ssn = 0
+    total_combats = 0
+    successful_combats = 0
+    total_lootings = 0
+    successful_lootings = 0
 
     def __init__(self):
         # Stats
@@ -58,10 +42,10 @@ class Automata:
         self.cha = sum([random.randint(1,6) for x in range(3)])
 
         # Personality dimensions
-        self.bravado = random.random()
-        self.gregariousness = random.random()
-        self.aggressiveness = random.random()
-        self.curiosity = random.random()
+        self.bravado = math.tanh(random.random())
+        self.gregariousness = math.tanh(random.random())
+        self.aggressiveness = math.tanh(random.random())
+        self.curiosity = math.tanh(random.random())
 
         # Health and wellness
         self.hit_points = random.randint(7,12) + stat_bonus[self.con]
@@ -73,9 +57,27 @@ class Automata:
         self.xp = 0
         self.weapons = []
         self.weapons.append(Fist())
+        self.shield = NoShield()
+        self.armor = None
+        self.ready_weapon = Fist()
+
+    def get_aggressiveness(self):
+        if self.total_combats > 0:
+            return math.tanh(self.successful_combats / self.total_combats)
+        else:
+            return math.tanh(random.random())
+
+    def get_curiosity(self):
+        if self.total_lootings > 0:
+            return math.tanh(self.successful_lootings / self.total_lootings)
+        else:
+            return math.tanh(random.random())
+
+    def get_bravado(self):
+        return math.tanh(random.random())
 
     def decide_to_travel(self):
-        r = math.tanh(self.bravado - self.aggressiveness)
+        r = self.get_bravado()
         if random.random() < r:
             return True
         else:
@@ -90,6 +92,10 @@ class Automata:
     def age(self):
         self.current_hit_points += -1
         return self.current_hit_points
+
+    def ac(self):
+        #return self.shield.ac_bonus + self.armor_bonus + stat_bonus[self.dex]
+        return self.shield.ac_bonus  + stat_bonus[self.dex]
 
 class Cell:
     def __init__(self, x, y):
@@ -118,6 +124,11 @@ class World:
                 c = Cell(i,j)
                 if random.random() < world_config.dagger_density:
                     c.items.append(Dagger())
+                if random.random() < world_config.smallshield_density:
+                    c.items.append(SmallShield())
+                if random.random() < world_config.largeshield_density:
+                    c.items.append(LargeShield())
+
                 self.cells[i,j] = c
 
         for i in range(world_config.initial_population_size):
@@ -141,7 +152,7 @@ class World:
                     if p.ssn != you.ssn and you.current_lon == p.current_lon and you.current_lat == p.current_lat:
                         #print("{me} met {you}".format(me=p.ssn, you=you.ssn))
                         self.automata_interaction(p, you)
-                if random.random() < p.curiosity:
+                if random.random() < p.get_curiosity():
                     self.loot_cell(p, current_cell)
 
         #self.day_report()=
@@ -163,15 +174,84 @@ class World:
         automata.current_hit_points = automata.current_hit_points + fu
 
     def loot_cell(self, automata, cell):
+        automata.total_lootings += 1
+        if len(cell.items) > 0:
+            automata.successful_lootings += 1
+            automata.curiosity +=  math.tanh(automata.successful_lootings/automata.total_lootings)
         for item in cell.items:
             if isinstance(item, Weapon):
-                print("got a weapon!")
                 automata.weapons.append(item)
+                cell.items.remove(item)
+                if isinstance(automata.ready_weapon, Fist):
+                    automata.ready_weapon = item
+            if isinstance(item, (SmallShield, LargeShield)) and isinstance(automata.shield, NoShield):
+                automata.shield = item
                 cell.items.remove(item)
 
     def automata_interaction(self, me, you):
-        pass
+        self.combat(me, you)
+
+    def combat(self, me, you):
+        me.total_combats += 1
+        you.total_combats += 1
+        first = me
+        second = you
+        if me.dex < you.dex:
+            first = you
+            second = me
+        elif me.dex == you.dex:
+            first = me
+            second = you
+        print("Fight! {id} goes first".format(id=first.ssn))
+        roll = random.randint(1,20)
+        if roll + stat_bonus[first.str] > second.ac():
+            damage = max(0,first.ready_weapon.damage() + stat_bonus[first.str])
+            second.current_hit_points -= damage
+            print("\tA touch! Damage: {d}".format(d= damage))
+        if second.current_hit_points <= 0:
+            first.successful_combats += 1
+            first.aggressiveness += first.successful_combats / first.total_combats
+            first.gold += second.gold
+            self.population.remove(second)
+            print("\t{id} is dead".format(id=second.ssn))
+            return
+        # Second gets her turn
+        roll = random.randint(1,20)
+        if roll + stat_bonus[second.str] > first.ac():
+            damage = max(0,second.ready_weapon.damage() + stat_bonus[second.str])
+            first.current_hit_points -= damage
+            print("\tA touch! Damage: {d}".format(d= damage))
+        if first.current_hit_points <= 0:
+            second.successful_combats += 1
+            second.aggressiveness += second.successful_combats / second.total_combats
+            second.gold += first.gold
+            self.population.remove(first)
+            print("\t{id} is dead".format(id=first.ssn))
+            return
 
     def day_report(self):
         #print("Day: {day}\n\tliving population: {pop_size}\n".format(day=self.day, pop_size=len(self.population)))
-        return (self.day, len(self.population))
+        numcur = 0
+        numbrv = 0
+        numagg = 0
+        numgreg = 0
+        numgold = 0
+        for p in self.population:
+            numcur += p.get_curiosity()
+            numbrv += p.bravado
+            numagg += p.get_aggressiveness()
+            numgreg += p.gregariousness
+            numgold += p.gold
+        return (self.day, len(self.population)
+            , numcur/len(self.population)
+            , numbrv/len(self.population)
+            , numagg/len(self.population)
+            , numgreg/len(self.population)
+            , numgold/len(self.population)
+            )
+
+class Day(object):
+    def __init__(self):
+        self.fights = 0
+        self.population = 0
+        self.murders = 0
