@@ -70,11 +70,6 @@ class Automata:
         s = (self.str+self.con)/36.0
         if self.total_combats > 0:
             s+= self.adaptability() * (self.successful_combats/self.total_combats - 1/2)
-            #s = (self.str+self.con)/36.0 + self.adaptability() * (self.successful_combats/self.total_combats - 1/2)
-            #return math.tanh(s)
-        else:
-            s = (self.str+self.con)/36.0
-            return math.tanh(s)
         return math.tanh(s)
 
     def get_curiosity(self):
