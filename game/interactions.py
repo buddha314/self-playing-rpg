@@ -4,10 +4,17 @@ import world_config
 def interact(obj, obj_other, distance):
     if obj == obj_other:
         return
-    if obj.name == "Player" and obj_other.name == "Player":
+    elif obj.name == "Player" and obj_other.name == "Player":
         player_interaction(obj["Player"], obj_other["Player"], distance)
+    elif obj.name == "Player" and obj_other.name == "Weapon":
+        item_interaction(obj["Player"], obj["Weapon"])
     #else:
     #    print("Non-human interaction between %s and %s" % (obj.name, obj_other.name))
+
+def item_interaction(me, it, distance):
+    if obj == obj_other:
+        return
+
 
 def player_interaction(me, you, distance):
     if distance < me.perception():
